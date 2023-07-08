@@ -11,7 +11,10 @@ const SCOPES = ['https://www.googleapis.com/auth/gmail.modify'];
 // time.
 const TOKEN_PATH = path.join(process.cwd(), 'token.json');
 const CREDENTIALS_PATH = path.join(process.cwd(), 'credentials.json');
-let historyId;
+
+// timer for calling watchGmail
+let timer;
+let lastHistoryId;
 
 /**
  * Reads previously authorized credentials from the save file.
@@ -68,28 +71,58 @@ async function authorize() {
 }
 
 /**
- * Synchronize with user's gmail account.
- *
- * @param {google.auth.OAuth2} auth An authorized OAuth2 client.
+ * Watch for changes in user's gmail account.
  */
-async function syncWithGmail(auth) {
-    const gmail = google.gmail({version: 'v1', auth});
-    const res  = await gmail.users.messages.list({ 
-        userId: 'me' 
-    });
-    const messages = res.data.messages;
-
-    if (!messages || messages.length === 0) {
-        console.log('No labels found.');
-        return;
-    }
+async function watchGmail(auth) {
     
-    const mostRecentMessage = await gmail.users.messages.get({
-        userId: 'me',
-        id: messages[0].id
-    });
+    const gmail = google.gmail({version: 'v1', auth});
+    const profile = await gmail.users.getProfile({ userId: 'me' });
+    
+    if (lastHistoryId) {
 
-    historyId = mostRecentMessage.data.historyId;
+        const res = await gmail.users.history.list({
+            userId: 'me',
+            startHistoryId: lastHistoryId,
+            historyTypes: ['messageAdded'],
+        });
+
+        const history =  res.data.history;
+
+        if (history && history.length > 0) {
+            console.log(history);
+
+            for (const {message} of history[history.length-1].messagesAdded) {
+
+                if (message) {
+                    console.log(message.id);
+                    const id = message.id;
+
+                    try {
+                        const content = await gmail.users.messages.get({
+                            userId: 'me',
+                            id: id,
+                        });
+
+                        console.log(content);
+
+                    } catch (e) {
+
+                        console.error('DID NOT GET MESSAGE', {
+                            messageId: id,
+                            error: e.message,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    lastHistoryId = profile.data.historyId;
+    console.log(lastHistoryId);
+
+    const timeoutValue = Math.random() * (120-45) + 45;
+    console.log(timeoutValue);
+    timer = setTimeout(() => watchGmail(auth), 15 * 1000);
 }
 
-authorize().then(syncWithGmail).catch(console.error);
+authorize().then(watchGmail).catch(console.error);
