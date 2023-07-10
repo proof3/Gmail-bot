@@ -15,10 +15,12 @@ const SCOPES = ['https://mail.google.com/',
 // time.
 const TOKEN_PATH = path.join(process.cwd(), 'token.json');
 const CREDENTIALS_PATH = path.join(process.cwd(), 'credentials.json');
+const LABEL_PATH = path.join(process.cwd(), 'label.json');
 
 // timer for calling watchGmail
 let timer;
-let lastHistoryId;
+let lastHistoryId = undefined;
+let labelId = undefined;
 const respondedThreads = new Set();
 
 /**
@@ -100,7 +102,10 @@ async function watchGmail(auth) {
         //check if there are any history records
         if (history && history.length > 0) {
 
-            await processMessages(history[history.length-1].messagesAdded, gmail);
+            for (const message of history) {
+                console.log(message);
+                if (message) await processMessages(message.messagesAdded, gmail);
+            }
         }
     }
 
@@ -110,57 +115,9 @@ async function watchGmail(auth) {
 
     const timeoutValue = Math.random() * (120-45) + 45;
     console.log(timeoutValue);
-    timer = setTimeout(() => watchGmail(auth), 15 * 1000);
+    timer = setTimeout(() => watchGmail(auth), timeoutValue * 1000);
 }
 
-
-/** function checks if you have previously replied to thread
- *  before turning the bot on */
-// async function checkIfReplied(gmail, messagesToReply, history) {
-
-//     if (history && history.length > 0) {
-//         console.log(history);
-
-//         //check if replied to thread
-//         for (const {message} of history[history.length-1].messagesAdded) {
-//             const {threadId} = message.threadId;
-//             if (respondedThreads.has(threadId)) {
-//                 continue;
-//             }
-
-//             try {
-//                 const thread = await gmail.users.threads.get({
-//                     userId: 'me',
-//                     id: threadId,
-//                 });
-//                 const {messages} = thread.data;
-
-//                 for(const {payload} of messages) {
-
-//                     const {headers} = payload.headers;
-//                     for(const {name, value} of headers) {
-
-//                         if (name === 'From' && value === 'me') {
-//                             respondedThreads.add(threadId);
-//                             break;
-//                         }
-//                         else if (name === 'From' && value !== 'me') {
-//                             messagesToReply.push(threadId);
-//                             break;
-//                         }
-//                     }
-//                 }
-//             }
-//             catch (e) {
-
-//                 console.error('DID NOT GET THREAD', {
-//                     threadId,
-//                     error: e.message,
-//                 });
-//             }
-//         }
-//     }
-// }
 
 async function processMessages(history, gmail) {
 
@@ -212,7 +169,25 @@ async function processMessages(history, gmail) {
                 }
                 
                 const newThreadReply = await replyToMessage(gmail, from, to, subject, references, inReplyTo);
-                newThreadReply !== '' ? respondedThreads.add(newThreadReply): null;
+
+                if (newThreadReply !== '') {
+                    respondedThreads.add(newThreadReply);
+
+                    //create label if it doesnt exist and add to thread
+                    if (labelId === undefined) {
+                        const label = await loadSavedLabelIfExist();
+                        if  (label) {
+                            labelId = label.id;
+                        }
+                        else {
+                            const createdLabel = await createLabel(gmail);
+                            saveLabel(createdLabel.data);
+                            labelId = createdLabel.data.id;
+                        }
+                    }
+
+                    await addLabelToThread(gmail, newThreadReply);
+                }
 
             } catch (e) {
 
@@ -225,9 +200,66 @@ async function processMessages(history, gmail) {
     }
 }
 
-async function replyToMessage(gmail, from, to, subject, references, inReplyTo) {
+async function loadSavedLabelIfExist() {
+    try {
+        const content = await fs.readFile(LABEL_PATH);
+        const label = JSON.parse(content);
+        return label;
+    } catch (err) {
+        return null;
+    }
+}
 
-    console.log('to: '+ to);
+async function saveLabel(label) {
+
+    const payload = JSON.stringify(label);
+    await fs.writeFile(LABEL_PATH, payload);
+}
+
+async function createLabel(gmail) {
+
+    // create new label
+    let label;
+
+    //create label
+    try {
+        label = await gmail.users.labels.create({
+            userId: 'me',
+            requestBody: {
+                name: 'Emails_Replied_To',
+                labelListVisibility: 'labelShow',
+                messageListVisibility: 'show',
+            },
+        });
+    }
+    catch (e) {
+        console.error('DID NOT CREATE LABEL', {
+            error: e.message,
+        });
+    }
+
+    return label;     
+}
+
+async function addLabelToThread(gmail, threadId) {
+
+    try {
+        await gmail.users.threads.modify({
+            userId: 'me',
+            id: threadId,
+            requestBody: {
+                addLabelIds: [labelId],
+            },
+        });
+    }
+    catch (e) {
+        console.error('DID NOT ADD LABEL', {
+            error: e.message,
+        });
+    }
+}
+
+async function replyToMessage(gmail, from, to, subject, references, inReplyTo) {
 
     const messageParts = [
         `From: ${from}`,
