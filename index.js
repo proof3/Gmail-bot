@@ -222,19 +222,24 @@ async function processMessages(history, gmail) {
 
     try {
 
-        const res = await gmail.users.labels.get({
+        const res = await gmail.users.labels.list({
             userId: 'me',
-            id: 'Emails_Replied_To',
         });
 
-        return true;
+        for (const label of res.data.labels) {
+            if (label.name === 'Emails_Replied_To') {
+                labelId = label.id;
+                return true;
+            }
+        }
+
     }
     catch (e) {
-        console.error('DID NOT GET LABELS', {
+        console.error('DID NOT GET LABEL', {
             error: e.message,
         });
     }
-    
+
     return false;
  }
 
@@ -255,7 +260,6 @@ async function createLabel(gmail) {
             userId: 'me',
             requestBody: {
                 name: 'Emails_Replied_To',
-                id: 'Emails_Replied_To',
                 labelListVisibility: 'labelShow',
                 messageListVisibility: 'show',
             },
