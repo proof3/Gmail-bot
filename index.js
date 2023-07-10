@@ -15,7 +15,6 @@ const SCOPES = ['https://mail.google.com/',
 // time.
 const TOKEN_PATH = path.join(process.cwd(), 'token.json');
 const CREDENTIALS_PATH = path.join(process.cwd(), 'credentials.json');
-const LABEL_PATH = path.join(process.cwd(), 'label.json');
 
 // timer for calling watchGmail
 let timer;
@@ -29,6 +28,7 @@ const respondedThreads = new Set();
  * @return {Promise<OAuth2Client|null>}
  */
 async function loadSavedCredentialsIfExist() {
+
     try {
         const content = await fs.readFile(TOKEN_PATH);
         const credentials = JSON.parse(content);
@@ -79,6 +79,7 @@ async function authorize() {
 
 /**
  * Watch for changes in user's gmail account.
+ *  @param {OAuth2Client} auth
  */
 async function watchGmail(auth) {
     
@@ -102,6 +103,7 @@ async function watchGmail(auth) {
         //check if there are any history records
         if (history && history.length > 0) {
 
+            //process each history record
             for (const message of history) {
                 console.log(message);
                 if (message) await processMessages(message.messagesAdded, gmail);
@@ -109,7 +111,7 @@ async function watchGmail(auth) {
         }
     }
 
-
+    //update lastHistoryId and set timer for next sync
     lastHistoryId = profile.data.historyId;
     console.log(lastHistoryId);
 
@@ -118,9 +120,16 @@ async function watchGmail(auth) {
     timer = setTimeout(() => watchGmail(auth), timeoutValue * 1000);
 }
 
-
+/**
+ * Process messages added since last sync.
+ * @param {Array} history
+ * @param {OAuth2Client} gmail
+ * @return {Promise<void>}
+ * 
+ */
 async function processMessages(history, gmail) {
 
+    //reply to all answered messages in the history record
     for (const {message} of history) {
 
         if (message) {
@@ -134,6 +143,7 @@ async function processMessages(history, gmail) {
                 continue;
             }
 
+            // get message content and parse headers
             try {
 
                 const content = await gmail.users.messages.get({
@@ -168,22 +178,24 @@ async function processMessages(history, gmail) {
                     }
                 }
                 
+                //reply to message and get threadId of new thread created
                 const newThreadReply = await replyToMessage(gmail, from, to, subject, references, inReplyTo);
 
+                //create label if not created and add label to thread only if reply was sent
                 if (newThreadReply !== '') {
-                    respondedThreads.add(newThreadReply);
 
+                    respondedThreads.add(newThreadReply);
                     //create label if it doesnt exist and add to thread
                     if (labelId === undefined) {
-                        const label = await loadSavedLabelIfExist();
-                        if  (label) {
-                            labelId = label.id;
-                        }
-                        else {
+
+                        //check if label is saved
+                        const labelExists = await checkLabelExisits(gmail);
+                        //create label if it doesnt exist
+                        if (!labelExists) {
                             const createdLabel = await createLabel(gmail);
-                            saveLabel(createdLabel.data);
                             labelId = createdLabel.data.id;
                         }
+                        
                     }
 
                     await addLabelToThread(gmail, newThreadReply);
@@ -200,22 +212,38 @@ async function processMessages(history, gmail) {
     }
 }
 
-async function loadSavedLabelIfExist() {
+/**
+ * Check if label exists
+ * @param {OAuth2Client} gmail
+ * @return {Promise<bool>}
+ * 
+ */
+ async function checkLabelExisits(gmail) {
+
     try {
-        const content = await fs.readFile(LABEL_PATH);
-        const label = JSON.parse(content);
-        return label;
-    } catch (err) {
-        return null;
+
+        const res = await gmail.users.labels.get({
+            userId: 'me',
+            id: 'Emails_Replied_To',
+        });
+
+        return true;
     }
-}
+    catch (e) {
+        console.error('DID NOT GET LABELS', {
+            error: e.message,
+        });
+    }
+    
+    return false;
+ }
 
-async function saveLabel(label) {
-
-    const payload = JSON.stringify(label);
-    await fs.writeFile(LABEL_PATH, payload);
-}
-
+/**
+ * Create label
+ * @param {OAuth2Client} gmail
+ * @return {Promise<JSON>}
+ *
+ */
 async function createLabel(gmail) {
 
     // create new label
@@ -227,6 +255,7 @@ async function createLabel(gmail) {
             userId: 'me',
             requestBody: {
                 name: 'Emails_Replied_To',
+                id: 'Emails_Replied_To',
                 labelListVisibility: 'labelShow',
                 messageListVisibility: 'show',
             },
@@ -241,6 +270,13 @@ async function createLabel(gmail) {
     return label;     
 }
 
+/**
+ * Add label to thread
+ * @param {OAuth2Client} gmail
+ * @param {string} threadId
+ * @return {Promise<void>}
+ * 
+ */
 async function addLabelToThread(gmail, threadId) {
 
     try {
@@ -259,8 +295,20 @@ async function addLabelToThread(gmail, threadId) {
     }
 }
 
+/**
+ * Reply to message
+ * @param {OAuth2Client} gmail
+ * @param {string} from
+ * @param {string} to
+ * @param {string} subject
+ * @param {string} references
+ * @param {string} inReplyTo
+ * @return {Promise<string>}
+ * 
+ */
 async function replyToMessage(gmail, from, to, subject, references, inReplyTo) {
 
+    //create message
     const messageParts = [
         `From: ${from}`,
         `To: ${to}`,
@@ -282,6 +330,7 @@ async function replyToMessage(gmail, from, to, subject, references, inReplyTo) {
         .replace(/\//g, '_')
         .replace(/=+$/, '');
 
+    //send bas64 encoded message
     try {
 
         const res = await gmail.users.messages.send({
@@ -291,7 +340,7 @@ async function replyToMessage(gmail, from, to, subject, references, inReplyTo) {
             },
           });
 
-        console.log(res.data);
+        // return threadId of new thread created
         return res.data.threadId;
     }
     catch (e) {
@@ -301,6 +350,7 @@ async function replyToMessage(gmail, from, to, subject, references, inReplyTo) {
         });
     }
 
+    //return empty string if message was not sent
     return '';
 }
 
