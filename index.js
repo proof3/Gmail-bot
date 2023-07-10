@@ -3,7 +3,6 @@ import path from 'path';
 import process from 'process';
 import {authenticate} from '@google-cloud/local-auth';
 import {google} from 'googleapis';
-import { get } from 'http';
 
 // If modifying these scopes, delete token.json.
 const SCOPES = ['https://mail.google.com/',
